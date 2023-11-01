@@ -1,0 +1,240 @@
+From 49294a6a7cb6e9ece1c1814d629e2d9e497180fa Mon Sep 17 00:00:00 2001
+From: Dariusz Smigiel <dsmigiel@redhat.com>
+Date: Thu, 19 May 2022 09:41:59 -0700
+Subject: [PATCH 1/4] OAuth1: Allow IPv6 addresses being parsed by signature
+
+This PR addresses issue with incorrectly parsing IPv6 address,
+described here: https://github.com/oauthlib/oauthlib/issues/817
+---
+ oauthlib/oauth1/rfc5849/signature.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/oauthlib/oauth1/rfc5849/signature.py b/oauthlib/oauth1/rfc5849/signature.py
+index a370ccd6..424393b6 100644
+--- a/oauthlib/oauth1/rfc5849/signature.py
++++ b/oauthlib/oauth1/rfc5849/signature.py
+@@ -173,7 +173,7 @@ def base_string_uri(uri: str, host: str = None) -> str:
+     if ':' in netloc:
+         # Contains a colon ":", so try to parse as "host:port"
+ 
+-        hostname, port_str = netloc.split(':', 1)
++        hostname, port_str = netloc.rsplit(':', 1)
+ 
+         if len(hostname) == 0:
+             raise ValueError('missing host')  # error: netloc was ":port" or ":"
+
+From d05c388078b45285ac4a012c568a5e2d56556a34 Mon Sep 17 00:00:00 2001
+From: Dariusz Smigiel <dsmigiel@redhat.com>
+Date: Wed, 15 Jun 2022 09:26:20 -0700
+Subject: [PATCH 2/4] Removed dependency on split
+
+---
+ oauthlib/oauth1/rfc5849/signature.py    | 68 +++++++++++++++----------
+ tests/oauth1/rfc5849/test_signatures.py | 21 +++++++-
+ 2 files changed, 60 insertions(+), 29 deletions(-)
+
+diff --git a/oauthlib/oauth1/rfc5849/signature.py b/oauthlib/oauth1/rfc5849/signature.py
+index 424393b6..70447852 100644
+--- a/oauthlib/oauth1/rfc5849/signature.py
++++ b/oauthlib/oauth1/rfc5849/signature.py
+@@ -37,6 +37,7 @@
+ import binascii
+ import hashlib
+ import hmac
++import ipaddress
+ import logging
+ import warnings
+ 
+@@ -131,7 +132,14 @@ def base_string_uri(uri: str, host: str = None) -> str:
+         raise ValueError('uri must be a string.')
+ 
+     # FIXME: urlparse does not support unicode
+-    scheme, netloc, path, params, query, fragment = urlparse.urlparse(uri)
++    output = urlparse.urlparse(uri)
++    scheme = output.scheme
++    hostname = output.hostname
++    port = output.port
++    path = output.path
++    params = output.params
++    query = output.query
++    fragment = output.fragment
+ 
+     # The scheme, authority, and path of the request resource URI `RFC3986`
+     # are included by constructing an "http" or "https" URI representing
+@@ -153,13 +161,22 @@ def base_string_uri(uri: str, host: str = None) -> str:
+ 
+     # 1.  The scheme and host MUST be in lowercase.
+     scheme = scheme.lower()
+-    netloc = netloc.lower()
+     # Note: if ``host`` is used, it will be converted to lowercase below
++    if hostname is not None:
++        hostname = hostname.lower()
+ 
+     # 2.  The host and port values MUST match the content of the HTTP
+     #     request "Host" header field.
+     if host is not None:
+-        netloc = host.lower()  # override value in uri with provided host
++        # NOTE: override value in uri with provided host
++        # Host argument is equal to netloc. It means it's missing scheme.
++        # Add it back, before parsing.
++
++        host = host.lower()
++        host = f"{scheme}://{host}"
++        output = urlparse.urlparse(host)
++        hostname = output.hostname
++        port = output.port
+ 
+     # 3.  The port MUST be included if it is not the default port for the
+     #     scheme, and MUST be excluded if it is the default.  Specifically,
+@@ -170,33 +187,28 @@ def base_string_uri(uri: str, host: str = None) -> str:
+     # .. _`RFC2616`: https://tools.ietf.org/html/rfc2616
+     # .. _`RFC2818`: https://tools.ietf.org/html/rfc2818
+ 
+-    if ':' in netloc:
+-        # Contains a colon ":", so try to parse as "host:port"
+-
+-        hostname, port_str = netloc.rsplit(':', 1)
+-
+-        if len(hostname) == 0:
+-            raise ValueError('missing host')  # error: netloc was ":port" or ":"
++    if hostname is None:
++        raise ValueError('missing host')
+ 
+-        if len(port_str) == 0:
+-            netloc = hostname  # was "host:", so just use the host part
+-        else:
+-            try:
+-                port_num = int(port_str)  # try to parse into an integer number
+-            except ValueError:
+-                raise ValueError('port is not an integer')
+-
+-            if port_num <= 0 or 65535 < port_num:
+-                raise ValueError('port out of range')  # 16-bit unsigned ints
+-            if (scheme, port_num) in (('http', 80), ('https', 443)):
+-                netloc = hostname  # default port for scheme: exclude port num
+-            else:
+-                netloc = hostname + ':' + str(port_num)  # use hostname:port
++    # NOTE: Try guessing if we're dealing with IP or hostname
++    try:
++        hostname = ipaddress.ip_address(hostname)
++    except ValueError:
++        pass
++
++    if isinstance(hostname, ipaddress.IPv6Address):
++        hostname = f"[{hostname}]"
++    elif isinstance(hostname, ipaddress.IPv4Address):
++        hostname = f"{hostname}"
++
++    if port is not None and not (0 <= port <= 65535):
++        raise ValueError('port out of range')  # 16-bit unsigned ints
++    if (scheme, port) in (('http', 80), ('https', 443)):
++        netloc = hostname  # default port for scheme: exclude port num
++    elif port:
++        netloc = f"{hostname}:{port}"  # use hostname:port
+     else:
+-        # Does not contain a colon, so entire value must be the hostname
+-
+-        if len(netloc) == 0:
+-            raise ValueError('missing host')  # error: netloc was empty string
++        netloc = hostname
+ 
+     v = urlparse.urlunparse((scheme, netloc, path, params, '', ''))
+ 
+diff --git a/tests/oauth1/rfc5849/test_signatures.py b/tests/oauth1/rfc5849/test_signatures.py
+index 3e84f24b..e737e68b 100644
+--- a/tests/oauth1/rfc5849/test_signatures.py
++++ b/tests/oauth1/rfc5849/test_signatures.py
+@@ -239,6 +239,26 @@ def test_base_string_uri(self):
+             'http://override.example.com/path',
+             base_string_uri('http:///path', 'OVERRIDE.example.com'))
+ 
++        # ----------------
++        # Host: valid host allows for IPv4 and IPv6
++
++        self.assertEqual(
++            'https://192.168.0.1/',
++            base_string_uri('https://192.168.0.1')
++        )
++        self.assertEqual(
++            'https://192.168.0.1:13000/',
++            base_string_uri('https://192.168.0.1:13000')
++        )
++        self.assertEqual(
++            'https://[123:db8:fd00:1000::5]:13000/',
++            base_string_uri('https://[123:db8:fd00:1000::5]:13000')
++        )
++        self.assertEqual(
++            'https://[123:db8:fd00:1000::5]/',
++            base_string_uri('https://[123:db8:fd00:1000::5]')
++        )
++
+         # ----------------
+         # Port: default ports always excluded; non-default ports always included
+ 
+@@ -339,7 +359,6 @@ def test_base_string_uri(self):
+         self.assertRaises(ValueError, base_string_uri, 'http://:8080')
+ 
+         # Port is not a valid TCP/IP port number
+-        self.assertRaises(ValueError, base_string_uri, 'http://eg.com:0')
+         self.assertRaises(ValueError, base_string_uri, 'http://eg.com:-1')
+         self.assertRaises(ValueError, base_string_uri, 'http://eg.com:65536')
+         self.assertRaises(ValueError, base_string_uri, 'http://eg.com:3.14')
+
+From ed0cb63945c4a5940b185823809693b7f97989ad Mon Sep 17 00:00:00 2001
+From: Dariusz Smigiel <dsmigiel@redhat.com>
+Date: Wed, 15 Jun 2022 10:20:29 -0700
+Subject: [PATCH 3/4] Removed unused query and fragment
+
+---
+ oauthlib/oauth1/rfc5849/signature.py | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/oauthlib/oauth1/rfc5849/signature.py b/oauthlib/oauth1/rfc5849/signature.py
+index 70447852..7e8044a9 100644
+--- a/oauthlib/oauth1/rfc5849/signature.py
++++ b/oauthlib/oauth1/rfc5849/signature.py
+@@ -138,8 +138,6 @@ def base_string_uri(uri: str, host: str = None) -> str:
+     port = output.port
+     path = output.path
+     params = output.params
+-    query = output.query
+-    fragment = output.fragment
+ 
+     # The scheme, authority, and path of the request resource URI `RFC3986`
+     # are included by constructing an "http" or "https" URI representing
+
+From 9aa45aaff0cdeab258d18c025cf66e9bdba529c0 Mon Sep 17 00:00:00 2001
+From: Dariusz Smigiel <dsmigiel@redhat.com>
+Date: Mon, 27 Jun 2022 07:20:06 -0700
+Subject: [PATCH 4/4] Restored test for port 0.
+
+---
+ oauthlib/oauth1/rfc5849/signature.py    | 2 +-
+ tests/oauth1/rfc5849/test_signatures.py | 1 +
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/oauthlib/oauth1/rfc5849/signature.py b/oauthlib/oauth1/rfc5849/signature.py
+index 862c3f3c..9cb1a517 100644
+--- a/oauthlib/oauth1/rfc5849/signature.py
++++ b/oauthlib/oauth1/rfc5849/signature.py
+@@ -198,7 +198,7 @@ def base_string_uri(uri: str, host: str = None) -> str:
+     elif isinstance(hostname, ipaddress.IPv4Address):
+         hostname = f"{hostname}"
+ 
+-    if port is not None and not (0 <= port <= 65535):
++    if port is not None and not (0 < port <= 65535):
+         raise ValueError('port out of range')  # 16-bit unsigned ints
+     if (scheme, port) in (('http', 80), ('https', 443)):
+         netloc = hostname  # default port for scheme: exclude port num
+diff --git a/tests/oauth1/rfc5849/test_signatures.py b/tests/oauth1/rfc5849/test_signatures.py
+index f0e18093..2d4735ea 100644
+--- a/tests/oauth1/rfc5849/test_signatures.py
++++ b/tests/oauth1/rfc5849/test_signatures.py
+@@ -348,6 +348,7 @@ def test_base_string_uri(self):
+         self.assertRaises(ValueError, base_string_uri, 'http://:8080')
+ 
+         # Port is not a valid TCP/IP port number
++        self.assertRaises(ValueError, base_string_uri, 'http://eg.com:0')
+         self.assertRaises(ValueError, base_string_uri, 'http://eg.com:-1')
+         self.assertRaises(ValueError, base_string_uri, 'http://eg.com:65536')
+         self.assertRaises(ValueError, base_string_uri, 'http://eg.com:3.14')
