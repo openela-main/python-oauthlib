@@ -1,0 +1,282 @@
+From 6284bb10c4b67a9254cc6452efc99a4174607a36 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Wed, 23 Jun 2021 22:37:42 +0200
+Subject: [PATCH] Rip out RSA-SHA1
+
+---
+ oauthlib/oauth1/__init__.py                 |  2 --
+ oauthlib/oauth1/rfc5849/__init__.py         |  2 ++
+ oauthlib/oauth1/rfc5849/endpoints/base.py   | 11 +++---
+ oauthlib/oauth1/rfc5849/signature.py        | 37 +++------------------
+ tests/oauth1/rfc5849/endpoints/test_base.py |  9 -----
+ tests/oauth1/rfc5849/test_client.py         | 17 ++++------
+ tests/oauth1/rfc5849/test_signatures.py     | 33 +++++++++---------
+ 7 files changed, 36 insertions(+), 75 deletions(-)
+
+diff --git a/oauthlib/oauth1/__init__.py b/oauthlib/oauth1/__init__.py
+index 07ef422..5573ed6 100644
+--- a/oauthlib/oauth1/__init__.py
++++ b/oauthlib/oauth1/__init__.py
+@@ -10,8 +10,6 @@ from .rfc5849 import (SIGNATURE_HMAC,
+                       SIGNATURE_HMAC_SHA1,
+                       SIGNATURE_HMAC_SHA256,
+                       SIGNATURE_HMAC_SHA512,
+-                      SIGNATURE_RSA,
+-                      SIGNATURE_RSA_SHA1,
+                       SIGNATURE_RSA_SHA256,
+                       SIGNATURE_RSA_SHA512,
+                       SIGNATURE_PLAINTEXT)
+diff --git a/oauthlib/oauth1/rfc5849/__init__.py b/oauthlib/oauth1/rfc5849/__init__.py
+index c559251..1a56728 100644
+--- a/oauthlib/oauth1/rfc5849/__init__.py
++++ b/oauthlib/oauth1/rfc5849/__init__.py
+@@ -78,6 +78,8 @@ class Client:
+         SIGNATURE_HMAC_SHA1: signature.sign_hmac_sha1_with_client,
+         SIGNATURE_HMAC_SHA256: signature.sign_hmac_sha256_with_client,
+         SIGNATURE_HMAC_SHA512: signature.sign_hmac_sha512_with_client,
++        # sign_rsa_sha1_with_client actually points out to a dummy method
++        # that just throws an exception
+         SIGNATURE_RSA_SHA1: signature.sign_rsa_sha1_with_client,
+         SIGNATURE_RSA_SHA256: signature.sign_rsa_sha256_with_client,
+         SIGNATURE_RSA_SHA512: signature.sign_rsa_sha512_with_client,
+diff --git a/oauthlib/oauth1/rfc5849/endpoints/base.py b/oauthlib/oauth1/rfc5849/endpoints/base.py
+index 3a8c267..f1694d4 100644
+--- a/oauthlib/oauth1/rfc5849/endpoints/base.py
++++ b/oauthlib/oauth1/rfc5849/endpoints/base.py
+@@ -180,9 +180,12 @@ class BaseEndpoint:
+                 description='Invalid nonce format.')
+ 
+     def _check_signature(self, request, is_token_request=False):
++        # ---- RSA-SHA1 is not allowed ------ 
++        if request.signature_method == SIGNATURE_RSA_SHA1:
++            raise ValueError("Using RSA-SHA1 is deprecated, use HMAC-SHA1 or a stronger RSA-SHA***")
++
+         # ---- RSA Signature verification ----
+-        if request.signature_method == SIGNATURE_RSA_SHA1 or \
+-           request.signature_method == SIGNATURE_RSA_SHA256 or \
++        if request.signature_method == SIGNATURE_RSA_SHA256 or \
+            request.signature_method == SIGNATURE_RSA_SHA512:
+             # RSA-based signature method
+ 
+@@ -192,9 +195,7 @@ class BaseEndpoint:
+             rsa_key = self.request_validator.get_rsa_key(
+                 request.client_key, request)
+ 
+-            if request.signature_method == SIGNATURE_RSA_SHA1:
+-                valid_signature = signature.verify_rsa_sha1(request, rsa_key)
+-            elif request.signature_method == SIGNATURE_RSA_SHA256:
++            if request.signature_method == SIGNATURE_RSA_SHA256:
+                 valid_signature = signature.verify_rsa_sha256(request, rsa_key)
+             elif request.signature_method == SIGNATURE_RSA_SHA512:
+                 valid_signature = signature.verify_rsa_sha512(request, rsa_key)
+diff --git a/oauthlib/oauth1/rfc5849/signature.py b/oauthlib/oauth1/rfc5849/signature.py
+index a370ccd..d8f2761 100644
+--- a/oauthlib/oauth1/rfc5849/signature.py
++++ b/oauthlib/oauth1/rfc5849/signature.py
+@@ -561,7 +561,6 @@ def _get_jwt_rsa_algorithm(hash_algorithm_name: str):
+         # PyJWT has some nice pycrypto/cryptography abstractions
+         import jwt.algorithms as jwt_algorithms
+         m = {
+-            'SHA-1': jwt_algorithms.hashes.SHA1,
+             'SHA-256': jwt_algorithms.hashes.SHA256,
+             'SHA-512': jwt_algorithms.hashes.SHA512,
+         }
+@@ -727,44 +726,16 @@ def _verify_rsa(hash_algorithm_name: str,
+         return False
+ 
+ 
+-# ==== RSA-SHA1 ==================================================
++# ==== RSA-SHA1 DEPRECATED ================================================
+ 
+ def sign_rsa_sha1_with_client(sig_base_str, client):
+-    # For some reason, this function originally accepts both str and bytes.
+-    # This behaviour is preserved here. But won't be done for the newer
+-    # sign_rsa_sha256_with_client and sign_rsa_sha512_with_client functions,
+-    # which will only accept strings. The function to calculate a
+-    # "signature base string" always produces a string, so it is not clear
+-    # why support for bytes would ever be needed.
+-    sig_base_str = sig_base_str.decode('ascii')\
+-        if isinstance(sig_base_str, bytes) else sig_base_str
+-
+-    return _sign_rsa('SHA-1', sig_base_str, client.rsa_key)
+-
++    raise ValueError("RSA-SHA1 is deprecated, use a stronger hash or HMAC-SHA1")
+ 
+ def verify_rsa_sha1(request, rsa_public_key: str):
+-    return _verify_rsa('SHA-1', request, rsa_public_key)
+-
++    raise ValueError("RSA-SHA1 is deprecated, use a stronger hash or HMAC-SHA1")
+ 
+ def sign_rsa_sha1(base_string, rsa_private_key):
+-    """
+-    Deprecated function for calculating a RSA-SHA1 signature.
+-
+-    This function has been replaced by invoking ``sign_rsa`` with "SHA-1"
+-    as the hash algorithm name.
+-
+-    This function was invoked by sign_rsa_sha1_with_client and
+-    test_signatures.py, but does any application invoke it directly? If not,
+-    it can be removed.
+-    """
+-    warnings.warn('use _sign_rsa("SHA-1", ...) instead of sign_rsa_sha1',
+-                  DeprecationWarning)
+-
+-    if isinstance(base_string, bytes):
+-        base_string = base_string.decode('ascii')
+-
+-    return _sign_rsa('SHA-1', base_string, rsa_private_key)
+-
++    raise ValueError("RSA-SHA1 is deprecated, use a stronger hash or HMAC-SHA1")
+ 
+ # ==== RSA-SHA256 ================================================
+ 
+diff --git a/tests/oauth1/rfc5849/endpoints/test_base.py b/tests/oauth1/rfc5849/endpoints/test_base.py
+index e87f359..2d0d213 100644
+--- a/tests/oauth1/rfc5849/endpoints/test_base.py
++++ b/tests/oauth1/rfc5849/endpoints/test_base.py
+@@ -390,15 +390,6 @@ class SignatureVerificationTest(TestCase):
+         r = self.e._create_request(self.uri, 'GET', sig, URLENCODED)
+         self.assertTrue(self.e._check_signature(r))
+ 
+-    def test_rsa_signature(self):
+-        rsa_sig = ("fxFvCx33oKlR9wDquJ%2FPsndFzJphyBa3RFPPIKi3flqK%2BJ7yIrMVbH"
+-                   "YTM%2FLHPc7NChWz4F4%2FzRA%2BDN1k08xgYGSBoWJUOW6VvOQ6fbYhMA"
+-                   "FkOGYbuGDbje487XMzsAcv6ZjqZHCROSCk5vofgLk2SN7RZ3OrgrFzf4in"
+-                   "xetClqA%3D")
+-        sig = self.sig % (rsa_sig, "RSA-SHA1")
+-        r = self.e._create_request(self.uri, 'GET', sig, URLENCODED)
+-        self.assertTrue(self.e._check_signature(r))
+-
+     def test_plaintext_signature(self):
+         plain_sig = "super%252520secret%26even%252520more%252520secret"
+         sig = self.sig % (plain_sig, "PLAINTEXT")
+diff --git a/tests/oauth1/rfc5849/test_client.py b/tests/oauth1/rfc5849/test_client.py
+index f7c997f..d167652 100644
+--- a/tests/oauth1/rfc5849/test_client.py
++++ b/tests/oauth1/rfc5849/test_client.py
+@@ -2,7 +2,7 @@
+ from oauthlib.common import Request
+ from oauthlib.oauth1 import (
+     SIGNATURE_HMAC_SHA1, SIGNATURE_HMAC_SHA256, SIGNATURE_PLAINTEXT,
+-    SIGNATURE_RSA, SIGNATURE_TYPE_BODY, SIGNATURE_TYPE_QUERY,
++    SIGNATURE_RSA_SHA256, SIGNATURE_TYPE_BODY, SIGNATURE_TYPE_QUERY,
+ )
+ from oauthlib.oauth1.rfc5849 import Client
+ 
+@@ -75,9 +75,9 @@ class ClientConstructorTests(TestCase):
+                          client.SIGNATURE_METHODS[client.signature_method])
+ 
+     def test_rsa(self):
+-        client = Client('client_key', signature_method=SIGNATURE_RSA)
++        client = Client('client_key', signature_method=SIGNATURE_RSA_SHA256)
+         # instance is using the correct signer method
+-        self.assertEqual(Client.SIGNATURE_METHODS[SIGNATURE_RSA],
++        self.assertEqual(Client.SIGNATURE_METHODS[SIGNATURE_RSA_SHA256],
+                          client.SIGNATURE_METHODS[client.signature_method])
+         # don't need an RSA key to instantiate
+         self.assertIsNone(client.rsa_key)
+@@ -124,16 +124,13 @@ class SignatureMethodTest(TestCase):
+             "LVduVgh4v5yLT\nGa6FHdjGPcfajt+nrpB1n8UQBEH9ZxniokR/IPv"
+             "dMlxqXA==\n-----END RSA PRIVATE KEY-----"
+         )
+-        client = Client('client_key', signature_method=SIGNATURE_RSA,
++        client = Client('client_key', signature_method=SIGNATURE_RSA_SHA256,
+             rsa_key=private_key, timestamp='1234567890', nonce='abc')
+         u, h, b = client.sign('http://example.com')
+         correct = ('OAuth oauth_nonce="abc", oauth_timestamp="1234567890", '
+-                   'oauth_version="1.0", oauth_signature_method="RSA-SHA1", '
++                   'oauth_version="1.0", oauth_signature_method="RSA-SHA256", '
+                    'oauth_consumer_key="client_key", '
+-                   'oauth_signature="ktvzkUhtrIawBcq21DRJrAyysTc3E1Zq5GdGu8EzH'
+-                   'OtbeaCmOBDLGHAcqlm92mj7xp5E1Z6i2vbExPimYAJL7FzkLnkRE5YEJR4'
+-                   'rNtIgAf1OZbYsIUmmBO%2BCLuStuu5Lg3tAluwC7XkkgoXCBaRKT1mUXzP'
+-                   'HJILzZ8iFOvS6w5E%3D"')
++                   'oauth_signature="hJE2IGqCn3bw7ecu6psnsImrvERhTd667aIENzWbzdRGxEWwvAwJvWWCffD8P0Ox9IEu3gKD%2FzYdr36tBhW%2FMvdFsOAr4F41ojznv1urY6%2FD9FRs1py9dYuj1vdFYFUzziMBDv2w2emidDk8PqfHT1we5%2FIcH%2FKNCjMbkQgxsqE%3D"')
+         self.assertEqual(h['Authorization'], correct)
+ 
+     def test_plaintext_method(self):
+@@ -155,7 +152,7 @@ class SignatureMethodTest(TestCase):
+         self.assertRaises(ValueError, client.sign, 'http://example.com')
+ 
+     def test_rsa_no_key(self):
+-        client = Client('client_key', signature_method=SIGNATURE_RSA)
++        client = Client('client_key', signature_method=SIGNATURE_RSA_SHA256)
+         self.assertRaises(ValueError, client.sign, 'http://example.com')
+ 
+     def test_register_method(self):
+diff --git a/tests/oauth1/rfc5849/test_signatures.py b/tests/oauth1/rfc5849/test_signatures.py
+index 3e84f24..c505a38 100644
+--- a/tests/oauth1/rfc5849/test_signatures.py
++++ b/tests/oauth1/rfc5849/test_signatures.py
+@@ -640,18 +640,20 @@ GLYT3Jw1Lfb1bbuck9Y0JsRJO7uydWUbxXyZ+8YaDfE2NMw7sh2vAgMBAAE=
+ 
+     def test_sign_rsa_sha1_with_client(self):
+         """
+-        Test sign and verify with RSA-SHA1.
++        Test that sign and verify with RSA-SHA1 throws an exception
+         """
+-        self.assertEqual(
+-            self.expected_signature_rsa_sha1,
+-            sign_rsa_sha1_with_client(self.eg_signature_base_string,
+-                                      self.rsa_private_client))
+-        self.assertTrue(verify_rsa_sha1(
+-            MockRequest('POST',
+-                        'http://example.com/request',
+-                        self.eg_params,
+-                        self.expected_signature_rsa_sha1),
+-            self.rsa_public_client.rsa_key))
++        self.assertRaises(ValueError,
++                          sign_rsa_sha1_with_client,
++                          self.eg_signature_base_string,
++                          self.rsa_private_client)
++
++        self.assertRaises(ValueError,
++                          verify_rsa_sha1,
++                          MockRequest('POST',
++                                      'http://example.com/request',
++                                      self.eg_params,
++                                      self.expected_signature_rsa_sha1),
++                          self.rsa_public_client.rsa_key)
+ 
+     def test_sign_rsa_sha256_with_client(self):
+         """
+@@ -707,7 +709,6 @@ MmgDHR2tt8KeYTSgfU+BAkBcaVF91EQ7VXhvyABNYjeYP7lU7orOgdWMa/zbLXSU
+ ''')
+ 
+         for functions in [
+-            (sign_rsa_sha1_with_client, verify_rsa_sha1),
+             (sign_rsa_sha256_with_client, verify_rsa_sha256),
+             (sign_rsa_sha512_with_client, verify_rsa_sha512),
+         ]:
+@@ -757,12 +758,12 @@ MmgDHR2tt8KeYTSgfU+BAkBcaVF91EQ7VXhvyABNYjeYP7lU7orOgdWMa/zbLXSU
+ 
+         for bad_value in [None, '', 'foobar']:
+             self.assertRaises(ValueError,
+-                              sign_rsa_sha1_with_client,
++                              sign_rsa_sha256_with_client,
+                               self.eg_signature_base_string,
+                               MockClient(rsa_key=bad_value))
+ 
+         self.assertRaises(AttributeError,
+-                          sign_rsa_sha1_with_client,
++                          sign_rsa_sha256_with_client,
+                           self.eg_signature_base_string,
+                           self.rsa_public_client)  # public key doesn't sign
+ 
+@@ -770,11 +771,11 @@ MmgDHR2tt8KeYTSgfU+BAkBcaVF91EQ7VXhvyABNYjeYP7lU7orOgdWMa/zbLXSU
+ 
+         for bad_value in [None, '', 'foobar', self.rsa_private_client.rsa_key]:
+             self.assertRaises(TypeError,
+-                              verify_rsa_sha1,
++                              verify_rsa_sha256,
+                               MockRequest('POST',
+                                           'http://example.com/request',
+                                           self.eg_params,
+-                                          self.expected_signature_rsa_sha1),
++                                          self.expected_signature_rsa_sha256),
+                               MockClient(rsa_key=bad_value))
+ 
+         # For completeness, this text could repeat the above for RSA-SHA256 and
+-- 
+2.26.3
+
