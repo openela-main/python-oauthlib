@@ -20,13 +20,16 @@
 
 Name:               python-oauthlib
 Version:            2.1.0
-Release:            1%{?dist}
+Release:            2%{?dist}
 Summary:            An implementation of the OAuth request-signing logic
 
 Group:              Development/Libraries
 License:            BSD
 URL:                https://github.com/oauthlib/oauthlib
 Source0:            https://github.com/oauthlib/oauthlib/archive/v%{version}.tar.gz
+
+# https://github.com/oauthlib/oauthlib/commit/c951a1d09f99f14e3240973fa83c4f4287d4753d
+Patch0:             python-oauthlib-2.1.0-CVE-2026-118669.patch
 
 BuildArch:          noarch
 
@@ -98,6 +101,7 @@ very little effort.
 
 %prep
 %setup -q -n %{modname}-%{version}
+%patch -P 0 -p1
 
 # python-unittest2 is now provided by "python" package and python-unittest is retired
 #  adapt setup.py to reflect this fact downstream
@@ -147,6 +151,10 @@ rm -rf %{modname}.egg-info
 %endif # with python3
 
 %changelog
+* Thu Oct 29 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.1.0-2
+- CVE-2026-118669 python-oauthlib: oauthlib: privilege escalation via client identity confusion in token grant handlers
+- Resolves: RHEL-294716
+
 * Fri Aug  3 2018  <jdennis@redhat.com> - 2.1.0-1
 - upgrade to latest upstream 2.1.0
 - Resolves: rhbz#1612380
