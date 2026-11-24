@@ -2,7 +2,7 @@
 
 Name:               python-oauthlib
 Version:            3.1.1
-Release:            5%{?dist}
+Release:            5%{?dist}.1
 Summary:            An implementation of the OAuth request-signing logic
 
 License:            BSD
@@ -13,6 +13,9 @@ Patch0001:          0001-Rip-out-RSA-SHA1.patch
 Patch0002:          0002-Rip-out-the-rest-of-RSA.patch
 Patch0003:          0003-IPV6-regex-redirect_uri.patch
 Patch0004:          0004-IPV6-parsing-signature.patch
+# https://issues.redhat.com/browse/RHEL-294730
+# https://github.com/oauthlib/oauthlib/commit/c951a1d09f99f14e3240973fa83c4f4287d4753d
+Patch0005:          python-oauthlib-3.1.1-CVE-2026-118669.patch
 
 BuildArch:          noarch
 
@@ -77,6 +80,10 @@ rm jwt.py
 %{python3_sitelib}/%{modname}-%{version}-*
 
 %changelog
+* Thu Oct 29 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 3.1.1-5.1
+- CVE-2026-118669 python-oauthlib: oauthlib: privilege escalation via client identity confusion in token grant handlers
+  Resolves: RHEL-294730
+
 * Thu Nov 10 2022 TomasHalman <thalman@redhat.com> - 3.1.1-5
 - RFC5849 oauth1 signature base_string_uri doesn't parse IPv6 addresses
   Resolves: rhbz#2133805
